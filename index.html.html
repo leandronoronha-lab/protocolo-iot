@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Interativo - Checklist IOT</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Chosen Palette: Emergency Clinical (Slate backgrounds, crisp whites, stark semantic alerts: Red-600 for critical, Amber-500 for warnings, Emerald-600 for success, Blue-600 for primary actions). -->
+    <!-- Application Structure Plan: The SPA uses a "Wizard/Step-by-Step" architecture to manage cognitive load during a high-stress medical procedure. Instead of a long scrollable list, the interface is broken into distinct functional phases (Preparation, Airway, Meds, Briefing, Execution). A persistent sticky header keeps patient data visible at all times. The VORTEX protocol is visualized hierarchically. An interactive vitals chart is included to track patient stability before induction. A built-in timer assists with the critical 60-90 second pharmacological window. -->
+    <!-- Visualization & Content Choices: 
+         - Report Info: Patient Data & Vital Signs Tracker -> Goal: Continuous visibility & trend analysis -> Viz/Method: Sticky Header + Chart.js Line Chart -> Interaction: User logs vitals, chart dynamically updates -> Justification: Highlighting hemodynamic stability visually prevents premature induction. Library: Chart.js.
+         - Report Info: VORTEX Protocol (Plan A to D) -> Goal: Clear cognitive map of failure pathways -> Viz/Method: Stacked CSS blocks mimicking a funnel -> Interaction: Hover states and visual hierarchy -> Justification: In emergencies, visual flowcharts are processed faster than text. Library: HTML/Tailwind (NO SVG).
+         - Report Info: Action Sequence Timing -> Goal: Enforce strict waiting periods for paralytics -> Viz/Method: Large Interactive Digital Timer -> Interaction: Start/Stop/Reset buttons -> Justification: Eliminates mental math and ensures pharmacological efficacy before procedure. Library: Vanilla JS. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <style>
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 35vh;
+            max-height: 350px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 40vh;
+                max-height: 400px;
+            }
+        }
+        .step-active { background-color: #2563eb; color: white; border-color: #2563eb; }
+        .step-completed { background-color: #10b981; color: white; border-color: #10b981; }
+        .step-pending { background-color: #f8fafc; color: #64748b; border-color: #cbd5e1; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased h-screen flex flex-col overflow-hidden">
+
+    <div id="modal-bloqueio" class="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 text-center transform transition-all">
+            <img src="Prontil-Logo-768x768.png" alt="Hospital Prontil" class="h-20 mx-auto mb-4">
+            <h2 class="text-2xl font-black text-red-600 mb-2">PARADA OBRIGATÓRIA</h2>
+            <p class="text-slate-600 font-medium mb-6">
+                🚨 IMPRIMIR PLANILHA COM DOSES E EQUIPAMENTOS AGORA 🚨<br>
+                <span class="text-sm font-normal">(Não avance sem a planilha de doses calculada para o peso do paciente)</span>
+            </p>
+            <button id="btn-iniciar" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors text-lg shadow-lg">
+                Planilha Impressa - Iniciar Protocolo
+            </button>
+        </div>
+    </div>
+
+    <header class="bg-white border-b border-slate-200 shadow-sm z-30 shrink-0">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <img src="Prontil-Logo-768x768.png" alt="Logo Hospital Prontil" class="h-12 w-auto">
+                <div>
+                    <h1 class="font-black text-slate-800 leading-tight">HOSPITAL PRONTIL</h1>
+                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Checklist de Intubação (IOT)</p>
+                </div>
+            </div>
+            <div class="hidden md:flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                <div class="text-xs">
+                    <span class="block font-bold text-slate-500">TEMPO DE PROTOCOLO</span>
+                    <span id="global-timer" class="font-mono font-bold text-lg text-blue-600">00:00</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-blue-50 border-b border-blue-100 py-2">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap gap-4 items-center">
+                <span class="text-sm font-bold text-blue-800 flex items-center gap-1">👤 PACIENTE:</span>
+                <input type="text" placeholder="Nome do Paciente" class="px-2 py-1 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none w-48">
+                <input type="number" placeholder="Idade" class="px-2 py-1 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none w-20">
+                <input type="number" placeholder="Peso (kg)" class="px-2 py-1 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none w-24">
+                <select class="px-2 py-1 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                    <option>Alergias: Não</option>
+                    <option class="text-red-600 font-bold">Alergias: SIM (Atenção)</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+        <aside class="w-20 md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 overflow-y-auto z-20">
+            <nav class="p-4 space-y-2" id="nav-steps">
+                <button data-target="fase-1" class="w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all step-active group">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0 bg-white/20 border border-current">1</div>
+                    <span class="font-bold hidden md:block group-hover:opacity-80">Preparação</span>
+                </button>
+                <button data-target="fase-2" class="w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all step-pending group">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0 bg-white/20 border border-current">2</div>
+                    <span class="font-bold hidden md:block group-hover:opacity-80">Via Aérea</span>
+                </button>
+                <button data-target="fase-3" class="w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all step-pending group">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0 bg-white/20 border border-current">3</div>
+                    <span class="font-bold hidden md:block group-hover:opacity-80">Farmacologia</span>
+                </button>
+                <button data-target="fase-4" class="w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all step-pending group">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0 bg-white/20 border border-current">4</div>
+                    <span class="font-bold hidden md:block group-hover:opacity-80">Briefing & Sinais</span>
+                </button>
+                <button data-target="fase-5" class="w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all step-pending group">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0 bg-white/20 border border-current">5</div>
+                    <span class="font-bold hidden md:block group-hover:opacity-80">Procedimento</span>
+                </button>
+            </nav>
+            <div class="p-4 border-t border-slate-200 hidden md:block">
+                <div class="bg-slate-100 p-3 rounded-lg text-xs text-slate-600 font-medium leading-relaxed">
+                    Marque todos os itens de uma fase para avançar com segurança. A equipe deve acompanhar as marcações.
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-8 relative bg-slate-50 w-full" id="main-content">
+            
+            <section id="fase-1" class="phase-section max-w-4xl mx-auto space-y-6">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-800 border-b-4 border-blue-600 pb-2 inline-block mb-4">FASE 1: Preparação e Equipe</h2>
+                    <p class="text-slate-600 mb-6">Esta seção garante que a logística básica e o suporte de vida inicial estejam garantidos antes de iniciar qualquer intervenção na via aérea.</p>
+                </div>
+                
+                <div class="space-y-3 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <label class="flex items-start gap-4 p-3 rounded-lg hover:bg-slate-50 cursor-pointer border border-transparent hover:border-slate-200 transition-colors">
+                        <input type="checkbox" class="w-6 h-6 mt-0.5 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                        <div>
+                            <span class="font-bold text-lg block text-slate-800">1. Vaga UTI</span>
+                            <span class="text-slate-500 text-sm">Confirmar solicitação.</span>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-4 p-3 rounded-lg hover:bg-slate-50 cursor-pointer border border-transparent hover:border-slate-200 transition-colors">
+                        <input type="checkbox" class="w-6 h-6 mt-0.5 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                        <div>
+                            <span class="font-bold text-lg block text-slate-800">2. Ventilação</span>
+                            <span class="text-slate-500 text-sm">Chamar FISIOTERAPIA + Montagem/Teste do ventilador mecânico.</span>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-4 p-3 rounded-lg hover:bg-slate-50 cursor-pointer border border-transparent hover:border-slate-200 transition-colors">
+                        <input type="checkbox" class="w-6 h-6 mt-0.5 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                        <div>
+                            <span class="font-bold text-lg block text-slate-800">3. Paciente</span>
+                            <span class="text-slate-500 text-sm">Otimizar Posicionamento + Monitorização Completa + Checar Sinais Vitais.</span>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="flex justify-end mt-8">
+                    <button class="btn-next bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-colors flex items-center gap-2">
+                        Avançar para Via Aérea <span>➔</span>
+                    </button>
+                </div>
+            </section>
+
+            <section id="fase-2" class="phase-section max-w-5xl mx-auto space-y-6 hidden">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-800 border-b-4 border-blue-600 pb-2 inline-block mb-4">FASE 2: Materiais e Via Aérea</h2>
+                    <p class="text-slate-600 mb-6">Confirmação visual e física dos equipamentos ao lado do leito, estruturados segundo o protocolo VORTEX para gerenciamento de via aérea difícil.</p>
+                </div>
+
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div class="space-y-4">
+                        <div class="bg-emerald-50 border-2 border-emerald-500 rounded-xl p-5 shadow-sm">
+                            <h3 class="text-emerald-800 font-black text-xl mb-4 flex items-center gap-2">🟢 PLANO A <span class="text-sm font-normal text-emerald-600">(Tentativa Principal)</span></h3>
+                            <div class="space-y-3">
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-emerald-600 rounded phase-check">
+                                    <span class="text-emerald-900 font-medium"><strong>VIDEOLARINGO:</strong> Carregado e testado. Lâmina correta ("boca" até ângulo da mandíbula).</span>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-emerald-600 rounded phase-check">
+                                    <span class="text-emerald-900 font-medium"><strong>TUBO:</strong> Tamanho correto (com/sem cuff) + Fio guia (lubrificado e "curvado" na ponta) OU Bougie.</span>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-emerald-600 rounded phase-check">
+                                    <span class="text-emerald-900 font-medium"><strong>ASPIRAÇÃO:</strong> Testada e montada.</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="bg-amber-50 border-2 border-amber-500 rounded-xl p-5 shadow-sm">
+                            <h3 class="text-amber-800 font-black text-xl mb-4 flex items-center gap-2">🟡 PLANOS DE RESGATE <span class="text-sm font-normal text-amber-600">(Ter à mão!)</span></h3>
+                            <div class="space-y-3">
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-amber-600 rounded phase-check">
+                                    <span class="text-amber-900 font-medium"><strong>VENTILAÇÃO:</strong> AMBU testado + Máscara facial + Capnógrafo conectado.</span>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-amber-600 rounded phase-check">
+                                    <span class="text-amber-900 font-medium"><strong>ADJUNTOS:</strong> Cânula de Guedel (rima labial até lóbulo da orelha).</span>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-amber-600 rounded phase-check">
+                                    <span class="text-amber-900 font-medium"><strong>DISP. SUPRAGLÓTICO:</strong> Máscara Laríngea de tamanho correto (esvaziada e lubrificada).</span>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" class="w-5 h-5 mt-0.5 text-amber-600 rounded phase-check">
+                                    <span class="text-amber-900 font-medium"><strong>OXIGENAÇÃO PASSIVA:</strong> Cateter nasal separado.</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800 rounded-xl p-6 text-white flex flex-col justify-center items-center text-center shadow-lg relative overflow-hidden">
+                        <div class="absolute inset-0 opacity-10" style="background-image: repeating-linear-gradient(45deg, #000 0, #000 2px, transparent 2px, transparent 8px);"></div>
+                        <h3 class="text-2xl font-black mb-6 relative z-10">Mapeamento Mental: VORTEX</h3>
+                        <div class="w-full max-w-xs space-y-2 relative z-10 font-bold">
+                            <div class="bg-emerald-500 text-emerald-950 py-3 rounded-t-lg shadow">PLANO A: IOT (Laringo/Tubo)</div>
+                            <div class="text-xl">⬇️</div>
+                            <div class="bg-blue-500 text-blue-950 py-3 w-11/12 mx-auto shadow">PLANO B: Máscara + Guedel</div>
+                            <div class="text-xl">⬇️</div>
+                            <div class="bg-amber-500 text-amber-950 py-3 w-10/12 mx-auto shadow">PLANO C: Máscara Laríngea</div>
+                            <div class="text-xl">⬇️</div>
+                            <div class="bg-red-600 text-white py-4 w-9/12 mx-auto rounded-b-lg shadow animate-pulse border-2 border-red-300">PLANO D: VIA AÉREA CIRÚRGICA</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-between mt-8">
+                    <button class="btn-prev text-slate-500 hover:text-slate-800 font-bold py-3 px-6 transition-colors"><span>⬅</span> Voltar</button>
+                    <button class="btn-next bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-colors flex items-center gap-2">
+                        Avançar para Farmacologia <span>➔</span>
+                    </button>
+                </div>
+            </section>
+
+            <section id="fase-3" class="phase-section max-w-4xl mx-auto space-y-6 hidden">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-800 border-b-4 border-blue-600 pb-2 inline-block mb-4">FASE 3: Farmacologia</h2>
+                    <p class="text-slate-600 mb-6">Validação das medicações preparadas de acordo com a planilha impressa. Dupla checagem obrigatória.</p>
+                </div>
+
+                <div class="grid sm:grid-cols-2 gap-4">
+                    <label class="flex flex-col gap-2 p-5 rounded-xl border border-slate-200 bg-white hover:shadow-md cursor-pointer transition-all">
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" class="w-6 h-6 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                            <span class="font-black text-lg text-slate-800">INDUÇÃO (SRI)</span>
+                        </div>
+                        <p class="text-slate-500 text-sm ml-9">Seringas rotuladas de KETAMINA + ROCURÔNIO preparadas.</p>
+                    </label>
+
+                    <label class="flex flex-col gap-2 p-5 rounded-xl border border-red-200 bg-red-50 hover:shadow-md cursor-pointer transition-all">
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" class="w-6 h-6 text-red-600 rounded focus:ring-red-500 phase-check">
+                            <span class="font-black text-lg text-red-800">SEGURANÇA CARDÍACA</span>
+                        </div>
+                        <p class="text-red-700/80 text-sm ml-9">Adrenalina DILUÍDA (em seringa pronta para hipotensão/bradicardia/PCR).</p>
+                    </label>
+
+                    <label class="flex flex-col gap-2 p-5 rounded-xl border border-slate-200 bg-white hover:shadow-md cursor-pointer transition-all">
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" class="w-6 h-6 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                            <span class="font-black text-lg text-slate-800">MANUTENÇÃO</span>
+                        </div>
+                        <p class="text-slate-500 text-sm ml-9">Sedação contínua já prescrita e em bomba de infusão para o pós-IOT imediato.</p>
+                    </label>
+
+                    <label class="flex flex-col gap-2 p-5 rounded-xl border border-slate-200 bg-white hover:shadow-md cursor-pointer transition-all">
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" class="w-6 h-6 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                            <span class="font-black text-lg text-slate-800">HEMODINÂMICA</span>
+                        </div>
+                        <p class="text-slate-500 text-sm ml-9">Droga Vasoativa (DVA) já calculada e prescrita, se necessário.</p>
+                    </label>
+                </div>
+
+                <div class="flex justify-between mt-8">
+                    <button class="btn-prev text-slate-500 hover:text-slate-800 font-bold py-3 px-6 transition-colors"><span>⬅</span> Voltar</button>
+                    <button class="btn-next bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-colors flex items-center gap-2">
+                        Avançar para Briefing <span>➔</span>
+                    </button>
+                </div>
+            </section>
+
+            <section id="fase-4" class="phase-section max-w-5xl mx-auto space-y-6 hidden">
+                <div>
+                    <h2 class="text-2xl font-black text-slate-800 border-b-4 border-blue-600 pb-2 inline-block mb-4">FASE 4: Pré-Procedimento Imediato</h2>
+                    <p class="text-slate-600 mb-6">Revisão hemodinâmica final interativa e briefing da equipe (comunicação em alça fechada).</p>
+                </div>
+
+                <div class="grid lg:grid-cols-2 gap-6">
+                    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-black text-lg text-slate-800">6. Revisão Hemodinâmica</h3>
+                            <button id="btn-add-vitals" class="text-xs bg-slate-800 text-white px-3 py-1.5 rounded hover:bg-slate-700 transition">Registrar Sinais</button>
+                        </div>
+                        <div class="flex gap-4 mb-4">
+                            <div class="flex-1">
+                                <label class="text-xs font-bold text-slate-500 block mb-1">FC (bpm)</label>
+                                <input type="number" id="input-fc" class="w-full border border-slate-300 rounded p-2 text-center" placeholder="Ex: 110">
+                            </div>
+                            <div class="flex-1">
+                                <label class="text-xs font-bold text-slate-500 block mb-1">SpO2 (%)</label>
+                                <input type="number" id="input-spo2" class="w-full border border-slate-300 rounded p-2 text-center" placeholder="Ex: 92">
+                            </div>
+                        </div>
+                        
+                        <div class="chart-container flex-1 border border-slate-100 rounded bg-slate-50 p-2">
+                            <canvas id="vitalsChart"></canvas>
+                        </div>
+                        
+                        <label class="flex items-start gap-3 mt-4 pt-4 border-t border-slate-100 cursor-pointer">
+                            <input type="checkbox" class="w-6 h-6 mt-0.5 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                            <span class="font-medium text-slate-700">Hemodinâmica checada. Otimizada antes da indução se possível (perfusão, PA, congestão).</span>
+                        </label>
+                    </div>
+
+                    <div class="bg-blue-50 p-6 rounded-xl border border-blue-200 flex flex-col justify-center">
+                        <div class="flex items-center gap-3 mb-4">
+                            <span class="text-3xl">🗣️</span>
+                            <h3 class="font-black text-xl text-blue-900">7. Briefing da Equipe</h3>
+                        </div>
+                        <p class="text-blue-800 italic mb-4 text-sm font-medium border-l-4 border-blue-400 pl-4 py-2 bg-blue-100/50">
+                            "Líder verbaliza o plano de falha para que toda a equipe tenha consciência situacional."
+                        </p>
+                        <div class="space-y-3 bg-white p-4 rounded-lg border border-blue-100 text-slate-700 font-medium">
+                            <p><strong>Se falhar a IOT (Plano A)</strong> ➡️ Tentaremos Ventilar sob Máscara (VPP).</p>
+                            <p><strong>Se falhar VPP</strong> ➡️ Inserir Guedel + VPP a 4 mãos.</p>
+                            <p><strong>Se falhar VPP com adjuntos</strong> ➡️ Inserir Máscara Laríngea (Plano B).</p>
+                            <p class="text-red-600"><strong>Se falhar M.L.</strong> ➡️ Acionar Anestesio/CIPE + Preparar Via Aérea Cirúrgica.</p>
+                        </div>
+                        <label class="flex items-start gap-3 mt-6 cursor-pointer">
+                            <input type="checkbox" class="w-6 h-6 mt-0.5 text-blue-600 rounded focus:ring-blue-500 phase-check">
+                            <span class="font-bold text-lg text-blue-900">Briefing Verbalizado e Compreendido</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="flex justify-between mt-8">
+                    <button class="btn-prev text-slate-500 hover:text-slate-800 font-bold py-3 px-6 transition-colors"><span>⬅</span> Voltar</button>
+                    <button class="btn-next bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-colors flex items-center gap-2">
+                        Ir para o Procedimento <span>➔</span>
+                    </button>
+                </div>
+            </section>
+
+            <section id="fase-5" class="phase-section max-w-4xl mx-auto space-y-8 hidden pb-20">
+                <div class="text-center">
+                    <h2 class="text-3xl font-black text-red-600 mb-2 uppercase tracking-widest">Ação: Procedimento</h2>
+                    <p class="text-slate-600 font-medium">Execução disciplinada da sequência de intubação.</p>
+                </div>
+
+                <div class="bg-red-50 border-4 border-red-500 rounded-2xl p-6 shadow-xl relative">
+                    <div class="absolute -top-5 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-6 py-1 rounded-full font-black text-sm tracking-widest uppercase shadow">
+                        Líder lê em voz alta
+                    </div>
+                    <h3 class="text-xl font-black text-red-900 mb-4 text-center mt-2">🚨 CHECKLIST FINAL RÁPIDO 🚨</h3>
+                    <div class="grid grid-cols-2 gap-4 text-center">
+                        <label class="flex justify-center items-center gap-2 cursor-pointer bg-white p-3 rounded-lg shadow-sm border border-red-100 hover:bg-red-100">
+                            <input type="checkbox" class="w-5 h-5 text-red-600 rounded phase-check"><span class="font-bold text-red-900">"Sinais vitais ok?"</span>
+                        </label>
+                        <label class="flex justify-center items-center gap-2 cursor-pointer bg-white p-3 rounded-lg shadow-sm border border-red-100 hover:bg-red-100">
+                            <input type="checkbox" class="w-5 h-5 text-red-600 rounded phase-check"><span class="font-bold text-red-900">"Materiais/VORTEX ok?"</span>
+                        </label>
+                        <label class="flex justify-center items-center gap-2 cursor-pointer bg-white p-3 rounded-lg shadow-sm border border-red-100 hover:bg-red-100">
+                            <input type="checkbox" class="w-5 h-5 text-red-600 rounded phase-check"><span class="font-bold text-red-900">"Meds prontas?"</span>
+                        </label>
+                        <label class="flex justify-center items-center gap-2 cursor-pointer bg-white p-3 rounded-lg shadow-sm border border-red-100 hover:bg-red-100">
+                            <input type="checkbox" class="w-5 h-5 text-red-600 rounded phase-check"><span class="font-bold text-red-900">"Sedação pós/Vent ok?"</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden">
+                    <div class="bg-slate-800 text-white p-4">
+                        <h3 class="font-black text-xl">SEQUÊNCIA DE INDUÇÃO</h3>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <label class="flex items-start gap-4 cursor-pointer group">
+                            <div class="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-slate-500 shrink-0 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">1</div>
+                            <input type="checkbox" class="w-6 h-6 mt-1 text-emerald-600 rounded focus:ring-emerald-500 phase-check shrink-0">
+                            <div>
+                                <span class="font-bold text-lg text-slate-800 block">PRÉ-OXIGENAÇÃO</span>
+                                <span class="text-slate-600">VPP (ou máscara não reinalante) por 3 a 5 min. <strong>Visualizar curva do capnógrafo.</strong></span>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-start gap-4 cursor-pointer group">
+                            <div class="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-slate-500 shrink-0 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">2</div>
+                            <input type="checkbox" class="w-6 h-6 mt-1 text-emerald-600 rounded focus:ring-emerald-500 phase-check shrink-0">
+                            <div>
+                                <span class="font-bold text-lg text-slate-800 block">INDUÇÃO (ENFERMAGEM)</span>
+                                <span class="text-slate-600">Infundir drogas (Ketamina + Rocurônio).</span>
+                            </div>
+                        </label>
+
+                        <label class="flex items-start gap-4 cursor-pointer group">
+                            <div class="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-slate-500 shrink-0 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">3</div>
+                            <input type="checkbox" class="w-6 h-6 mt-1 text-emerald-600 rounded focus:ring-emerald-500 phase-check shrink-0">
+                            <div>
+                                <span class="font-bold text-lg text-slate-800 block">OXIGENAÇÃO APNEICA</span>
+                                <span class="text-slate-600">Instalar cateter nasal antes da laringoscopia..</span>
+                            </div>
+                        </label>
+
+                        <div class="flex items-start gap-4 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                            <div class="bg-slate-200 w-8 h-8 rounded-full flex items-center justify-center font-bold text-slate-600 shrink-0">4</div>
+                            <div class="flex-1">
+                                <span class="font-bold text-lg text-slate-800 block mb-2">TEMPO DE AÇÃO</span>
+                                <span class="text-slate-600 block mb-4">Aguardar 60-90 segundos (tempo do bloqueador). <strong>Enfermagem AVISA O TEMPO em voz alta.</strong></span>
+                                
+                                <div class="bg-slate-800 rounded-xl p-6 text-center shadow-inner flex flex-col sm:flex-row items-center justify-between gap-6">
+                                    <div id="induction-timer" class="text-6xl font-mono font-black text-emerald-400 tracking-wider">00</div>
+                                    <div class="flex gap-3 w-full sm:w-auto">
+                                        <button id="btn-timer-start" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow">INICIAR</button>
+                                        <button id="btn-timer-reset" class="flex-1 sm:flex-none bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow">ZERAR</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <label class="flex items-start gap-4 cursor-pointer group bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+                            <div class="bg-emerald-200 w-8 h-8 rounded-full flex items-center justify-center font-bold text-emerald-800 shrink-0">5</div>
+                            <input type="checkbox" class="w-8 h-8 mt-0.5 text-emerald-600 rounded focus:ring-emerald-500 phase-check shrink-0">
+                            <div>
+                                <span class="font-black text-2xl text-emerald-900 block">PROCEDER COM LARINGOSCOPIA E INTUBAÇÃO</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="flex justify-start mt-8">
+                    <button class="btn-prev text-slate-500 hover:text-slate-800 font-bold py-3 px-6 transition-colors"><span>⬅</span> Voltar</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            // UI State & Global Variables
+            let currentPhase = 1;
+            const totalPhases = 5;
+            let globalSeconds = 0;
+            let globalTimerInterval = null;
+
+            // DOM Elements
+            const modalBloqueio = document.getElementById('modal-bloqueio');
+            const btnIniciar = document.getElementById('btn-iniciar');
+            const navButtons = document.querySelectorAll('#nav-steps button');
+            const sections = document.querySelectorAll('.phase-section');
+            const nextBtns = document.querySelectorAll('.btn-next');
+            const prevBtns = document.querySelectorAll('.btn-prev');
+            const globalTimerDisplay = document.getElementById('global-timer');
+            const checkboxes = document.querySelectorAll('.phase-check');
+
+            // 1. Initial Modal Handling
+            btnIniciar.addEventListener('click', () => {
+                modalBloqueio.style.opacity = '0';
+                setTimeout(() => {
+                    modalBloqueio.style.display = 'none';
+                    startGlobalTimer();
+                }, 300);
+            });
+
+            // 2. Global Timer Logic
+            function startGlobalTimer() {
+                globalTimerInterval = setInterval(() => {
+                    globalSeconds++;
+                    const min = String(Math.floor(globalSeconds / 60)).padStart(2, '0');
+                    const sec = String(globalSeconds % 60).padStart(2, '0');
+                    globalTimerDisplay.textContent = `${min}:${sec}`;
+                }, 1000);
+            }
+
+            // 3. Navigation Logic
+            function showPhase(phaseNumber) {
+                sections.forEach((sec, idx) => {
+                    if (idx + 1 === phaseNumber) {
+                        sec.classList.remove('hidden');
+                        // Small animation effect
+                        sec.style.opacity = 0;
+                        sec.style.transform = 'translateY(10px)';
+                        setTimeout(() => {
+                            sec.style.transition = 'all 0.3s ease-out';
+                            sec.style.opacity = 1;
+                            sec.style.transform = 'translateY(0)';
+                        }, 10);
+                    } else {
+                        sec.classList.add('hidden');
+                    }
+                });
+
+                navButtons.forEach((btn, idx) => {
+                    btn.classList.remove('step-active', 'step-completed', 'step-pending');
+                    if (idx + 1 < phaseNumber) {
+                        btn.classList.add('step-completed');
+                    } else if (idx + 1 === phaseNumber) {
+                        btn.classList.add('step-active');
+                    } else {
+                        btn.classList.add('step-pending');
+                    }
+                });
+                
+                currentPhase = phaseNumber;
+                document.getElementById('main-content').scrollTop = 0;
+            }
+
+            nextBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (currentPhase < totalPhases) showPhase(currentPhase + 1);
+                });
+            });
+
+            prevBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (currentPhase > 1) showPhase(currentPhase - 1);
+                });
+            });
+
+            navButtons.forEach((btn, idx) => {
+                btn.addEventListener('click', () => showPhase(idx + 1));
+            });
+
+            // 4. Checklist Progress Logic (Visual feedback only, doesn't hard-block)
+            checkboxes.forEach(chk => {
+                chk.addEventListener('change', (e) => {
+                    const parentLabel = e.target.closest('label');
+                    if (e.target.checked) {
+                        parentLabel.classList.add('bg-slate-100', 'border-blue-200');
+                        parentLabel.classList.remove('bg-white');
+                    } else {
+                        parentLabel.classList.remove('bg-slate-100', 'border-blue-200');
+                        parentLabel.classList.add('bg-white');
+                    }
+                });
+            });
+
+            // 5. Chart.js Implementation (Phase 4 - Vitals Tracker)
+            const ctx = document.getElementById('vitalsChart').getContext('2d');
+            const vitalsData = {
+                labels: ['Basal'],
+                datasets: [
+                    {
+                        label: 'SpO2 (%)',
+                        data: [98],
+                        borderColor: '#2563eb', // blue-600
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                        tension: 0.3,
+                        fill: true
+                    },
+                    {
+                        label: 'FC (bpm)',
+                        data: [85],
+                        borderColor: '#dc2626', // red-600
+                        backgroundColor: 'rgba(220, 38, 38, 0.1)',
+                        borderWidth: 2,
+                        yAxisID: 'y1',
+                        tension: 0.3,
+                        borderDash: [5, 5]
+                    }
+                ]
+            };
+
+            const vitalsChart = new Chart(ctx, {
+                type: 'line',
+                data: vitalsData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: { position: 'top', labels: { boxWidth: 12, usePointStyle: true } },
+                        tooltip: { backgroundColor: 'rgba(15, 23, 42, 0.9)', titleFont: {size: 13}, bodyFont: {size: 13} }
+                    },
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            min: 50,
+                            max: 100,
+                            title: { display: true, text: 'SpO2 (%)', color: '#2563eb', font: {weight: 'bold'} }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            min: 40,
+                            max: 180,
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'FC (bpm)', color: '#dc2626', font: {weight: 'bold'} }
+                        }
+                    }
+                }
+            });
+
+            document.getElementById('btn-add-vitals').addEventListener('click', () => {
+                const fc = document.getElementById('input-fc').value;
+                const spo2 = document.getElementById('input-spo2').value;
+                
+                if (fc && spo2) {
+                    const timeLabel = `T+${Math.floor(globalSeconds/60)}m`;
+                    vitalsChart.data.labels.push(timeLabel);
+                    vitalsChart.data.datasets[0].data.push(parseInt(spo2));
+                    vitalsChart.data.datasets[1].data.push(parseInt(fc));
+                    vitalsChart.update();
+                    
+                    document.getElementById('input-fc').value = '';
+                    document.getElementById('input-spo2').value = '';
+                } else {
+                    alert('Insira valores para FC e SpO2.');
+                }
+            });
+
+            // 6. Induction Timer (Phase 5)
+            const indTimerDisplay = document.getElementById('induction-timer');
+            const btnTimerStart = document.getElementById('btn-timer-start');
+            const btnTimerReset = document.getElementById('btn-timer-reset');
+            let indSeconds = 0;
+            let indInterval = null;
+            let indRunning = false;
+
+            function updateIndDisplay() {
+                indTimerDisplay.textContent = String(indSeconds).padStart(2, '0');
+                
+                // Visual cues based on 60-90s window
+                if(indSeconds >= 60 && indSeconds <= 90) {
+                    indTimerDisplay.className = "text-6xl font-mono font-black text-white bg-emerald-600 px-4 py-1 rounded tracking-wider animate-pulse";
+                } else if (indSeconds > 90) {
+                    indTimerDisplay.className = "text-6xl font-mono font-black text-amber-500 tracking-wider";
+                } else {
+                    indTimerDisplay.className = "text-6xl font-mono font-black text-emerald-400 tracking-wider";
+                }
+            }
+
+            btnTimerStart.addEventListener('click', () => {
+                if (!indRunning) {
+                    indRunning = true;
+                    btnTimerStart.textContent = "PAUSAR";
+                    btnTimerStart.classList.replace('bg-emerald-600', 'bg-amber-600');
+                    btnTimerStart.classList.replace('hover:bg-emerald-500', 'hover:bg-amber-500');
+                    
+                    indInterval = setInterval(() => {
+                        indSeconds++;
+                        updateIndDisplay();
+                    }, 1000);
+                } else {
+                    indRunning = false;
+                    clearInterval(indInterval);
+                    btnTimerStart.textContent = "CONTINUAR";
+                    btnTimerStart.classList.replace('bg-amber-600', 'bg-emerald-600');
+                    btnTimerStart.classList.replace('hover:bg-amber-500', 'hover:bg-emerald-500');
+                }
+            });
+
+            btnTimerReset.addEventListener('click', () => {
+                indRunning = false;
+                clearInterval(indInterval);
+                indSeconds = 0;
+                updateIndDisplay();
+                btnTimerStart.textContent = "INICIAR";
+                btnTimerStart.classList.replace('bg-amber-600', 'bg-emerald-600');
+                btnTimerStart.classList.replace('hover:bg-amber-500', 'hover:bg-emerald-500');
+            });
+
+        });
+    </script>
+</body>
+</html>
